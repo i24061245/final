@@ -1,5 +1,4 @@
-# final
-# Plasma Etching Simulation Code
+# final: Plasma Etching Simulation Code
 
 ## 參考資料
 
