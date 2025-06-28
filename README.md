@@ -2,9 +2,9 @@
 
 ## 參考資料
 
-1.**杜岳錡老師上課講義**
+1. **杜岳錡老師上課講義**
 
-2.**chatgpt+x.ai+gemini+claude**
+2. **chatgpt+x.ai+gemini+claude**
 
 3. **電漿和非電漿製程中 in-situ 製程監控技術**  
    來源：國家技術研究院  
