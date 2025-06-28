@@ -1,0 +1,92 @@
+#RF阻抗匹配網路
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+
+# 頻率與常數
+f = 13.56e6
+w = 2 * np.pi * f
+Z0 = 50
+ZL = 10 + 50j  # 負載阻抗（偏感性）
+
+# 匹配電路：圖 (c) 結構（先串聯電容、再並聯電感）
+def calculate_c_matching(ZL, Z0, w):
+    R = ZL.real
+    X = ZL.imag
+    if R >= Z0:
+        return None, None
+    Q = np.sqrt(Z0 / R - 1)
+    Xs = -R * Q
+    Xp = X + Xs
+    C = -1 / (w * Xs)
+    L = Xp / w
+    return C, L
+
+C, L = calculate_c_matching(ZL, Z0, w)
+
+if C and L:
+    # 建立元件阻抗
+    ZC = 1 / (1j * w * C)
+    ZL_match = 1j * w * L
+
+    # 串聯電容後阻抗
+    Z1 = ZL + ZC
+    # 並聯電感後等效輸入阻抗
+    Zin = 1 / (1 / Z1 + 1 / ZL_match)
+
+    # 計算反射係數
+    Gamma = (Zin - Z0) / (Zin + Z0)
+    SWR = (1 + abs(Gamma)) / (1 - abs(Gamma))
+    print(f"匹配成功：C ≈ {C*1e12:.2f} pF, L ≈ {L*1e6:.2f} μH")
+    print(f"匹配後等效阻抗 Zin ≈ {Zin:.2f} Ω")
+    print(f"反射係數 |Γ| = {abs(Gamma):.3f}")
+    print(f"反射功率比例 ≈ {abs(Gamma)**2 * 100:.2f}%")
+    print(f"SWR ≈ {SWR:.2f}")
+
+    # -------- 繪圖 --------
+    fig = plt.figure(figsize=(10, 6))
+    gs = gridspec.GridSpec(1, 2, width_ratios=[28, 1], wspace=0.02)
+    ax_main = fig.add_subplot(gs[0])
+
+    # 建立 C-L 掃描網格
+    C_vals = np.logspace(np.log10(1e-12), np.log10(1000e-12), 200)
+    L_vals = np.logspace(np.log10(0.1e-6), np.log10(10e-6), 200)
+    logSWR_grid = np.zeros((len(L_vals), len(C_vals)))
+
+    for i, L_val in enumerate(L_vals):
+        for j, C_val in enumerate(C_vals):
+            ZC = 1 / (1j * w * C_val)
+            ZL_match = 1j * w * L_val
+            Z1 = ZL + ZC
+            Zin = 1 / (1 / Z1 + 1 / ZL_match)
+            Gamma = (Zin - Z0) / (Zin + Z0)
+            SWR = (1 + abs(Gamma)) / (1 - abs(Gamma))
+            logSWR_grid[i, j] = np.log10(SWR)
+
+    # 畫圖
+    cp = ax_main.contourf(C_vals * 1e12, L_vals * 1e6, logSWR_grid, levels=50, cmap='Spectral')
+    contour_lines = ax_main.contour(C_vals * 1e12, L_vals * 1e6, logSWR_grid,
+                                    levels=np.linspace(logSWR_grid.min(), logSWR_grid.max(), 20),
+                                    colors='white', linewidths=0.6)
+    ax_main.clabel(contour_lines, inline=True, fontsize=8, fmt='%.1f')
+
+    # 匹配點
+    ax_main.plot(C * 1e12, L * 1e6, 'ro', label='Matching Point')
+    ax_main.text(C * 1e12 * 1.05, L * 1e6, f'{C*1e12:.1f} pF,\n{L*1e6:.2f} μH', color='red', fontsize=9)
+
+    ax_main.set_xscale('log')
+    ax_main.set_yscale('log')
+    ax_main.set_xlabel('Capacitance (pF)')
+    ax_main.set_ylabel('Inductance (μH)')
+    ax_main.set_title('log(SWR) Heatmap with Contour Lines and Matching Point')
+    ax_main.legend()
+    ax_main.tick_params(which='both', direction='in', top=True, right=True)
+
+    # colorbar
+    ax_cb = fig.add_subplot(gs[1])
+    cbar = plt.colorbar(cp, cax=ax_cb)
+    cbar.set_label('log₁₀(SWR)')
+    plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.1)
+    plt.show()
+else:
+    print("匹配失敗，無法找到合適的 C, L 值。")
