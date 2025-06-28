@@ -1,0 +1,222 @@
+#幾吋的晶圓CP值最高
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import signal
+import pandas as pd
+import seaborn as sns
+import ruptures as rpt
+
+# Set English font
+plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial']
+plt.rcParams['axes.unicode_minus'] = False
+
+class WaferTransistorCalculator:
+    def __init__(self):
+        self.wafer_sizes = {
+            '8-inch': 200,    # mm
+            '12-inch': 300,   # mm
+            '18-inch': 450    # mm (assumed future size)
+        }
+
+        # Process parameters
+        self.process_params = {
+            '8-inch': {'yield_rate': 0.85, 'cost_per_wafer': 100, 'edge_exclusion': 5},
+            '12-inch': {'yield_rate': 0.80, 'cost_per_wafer': 180, 'edge_exclusion': 7},
+            '18-inch': {'yield_rate': 0.70, 'cost_per_wafer': 500, 'edge_exclusion': 10}
+        }
+
+    def calculate_transistors_per_wafer_simple(self, wafer_diameter_mm, die_size_mm):
+      """Calculate number of dies per wafer using area-based estimation"""
+      wafer_radius = wafer_diameter_mm / 2
+      wafer_area = np.pi * wafer_radius ** 2
+      die_area = die_size_mm ** 2
+
+    # Estimate dies with packing efficiency (~0.8 for rectangular dies on circular wafer)
+      packing_efficiency = 0.8
+      gross_dies = int((wafer_area / die_area) * packing_efficiency)
+      return gross_dies
+
+    def calculate_transistors_per_wafer_realistic(self, wafer_size_name, die_size_mm, transistors_per_die):
+        """Realistic calculation considering process factors"""
+        wafer_diameter = self.wafer_sizes[wafer_size_name]
+        params = self.process_params[wafer_size_name]
+
+        # Subtract edge exclusion area
+        effective_diameter = wafer_diameter - 2 * params['edge_exclusion']
+
+        # Calculate effective die count
+        gross_dies = self.calculate_transistors_per_wafer_simple(effective_diameter, die_size_mm)
+
+        # Consider yield rate
+        good_dies = int(gross_dies * params['yield_rate'])
+
+        # Total transistors
+        total_transistors = good_dies * transistors_per_die
+
+        # Cost per transistor in dollars per transistor
+        cost_per_transistor = params['cost_per_wafer'] / total_transistors if total_transistors > 0 else float('inf')
+
+        print(f"Wafer: {wafer_size_name}, Die Size: {die_size_mm}mm, Gross Dies: {gross_dies}, "
+          f"Good Dies: {good_dies}, Total Transistors: {total_transistors}, "
+          f"Cost per Transistor: ${cost_per_transistor:.2e}")
+
+        return {
+          'gross_dies': gross_dies,
+          'good_dies': good_dies,
+          'total_transistors': total_transistors,
+          'yield_rate': params['yield_rate'],
+          'cost_per_wafer': params['cost_per_wafer'],
+          'cost_per_transistor': cost_per_transistor
+          }
+
+    def analyze_wafer_economics(self, die_sizes_mm=[5, 10, 15, 20], transistors_per_die=1000000):
+        """Analyze economic benefits for different wafer sizes"""
+        results = []
+
+        for wafer_name in self.wafer_sizes.keys():
+            for die_size in die_sizes_mm:
+                simple_count = self.calculate_transistors_per_wafer_simple(
+                    self.wafer_sizes[wafer_name], die_size)
+
+                realistic_result = self.calculate_transistors_per_wafer_realistic(
+                    wafer_name, die_size, transistors_per_die)
+
+                results.append({
+                    'wafer_size': wafer_name,
+                    'wafer_diameter_mm': self.wafer_sizes[wafer_name],
+                    'die_size_mm': die_size,
+                    'simple_dies': simple_count,
+                    'realistic_dies': realistic_result['good_dies'],
+                    'total_transistors': realistic_result['total_transistors'],
+                    'cost_per_wafer': realistic_result['cost_per_wafer'],
+                    'cost_per_transistor': realistic_result['cost_per_transistor'],
+                    'yield_rate': realistic_result['yield_rate']
+                })
+
+        return pd.DataFrame(results)
+
+    def plot_wafer_analysis(self, die_sizes_mm=[5, 10, 15, 20], transistors_per_die=1000000):
+        """Plot wafer analysis charts"""
+        df = self.analyze_wafer_economics(die_sizes_mm, transistors_per_die)
+
+        # Calculate CP value (transistors per dollar)
+        df['cp_value'] = df['total_transistors'] / df['cost_per_wafer']
+
+        # Rest of the plotting code remains the same, but ensure CP value is displayed correctly
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+
+        # 1. Simple vs realistic die count comparison
+        ax1 = axes[0, 0]
+        width = 0.35
+        wafer_names = df['wafer_size'].unique()
+        x = np.arange(len(wafer_names))
+
+        for i, die_size in enumerate(die_sizes_mm):
+            data = df[df['die_size_mm'] == die_size]
+            offset = (i - len(die_sizes_mm)/2) * width / len(die_sizes_mm)
+            ax1.bar(x + offset, data['simple_dies'], width/len(die_sizes_mm),
+                   label=f'{die_size}mm die (Simple)', alpha=0.7)
+
+        ax1.set_xlabel('Wafer Size')
+        ax1.set_ylabel('Die Count')
+        ax1.set_title('Die Capacity for Different Wafer Sizes (Simple Calculation)')
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(wafer_names)
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        # 2. Realistic yield considering process factors
+        ax2 = axes[0, 1]
+        for i, die_size in enumerate(die_sizes_mm):
+            data = df[df['die_size_mm'] == die_size]
+            offset = (i - len(die_sizes_mm)/2) * width / len(die_sizes_mm)
+            ax2.bar(x + offset, data['realistic_dies'], width/len(die_sizes_mm),
+                   label=f'{die_size}mm die (Realistic)', alpha=0.7)
+
+        ax2.set_xlabel('Wafer Size')
+        ax2.set_ylabel('Good Die Count')
+        ax2.set_title('Realistic Yield Considering Process Factors')
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(wafer_names)
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
+        # 3. Cost-benefit analysis
+        ax3 = axes[0, 2]
+        for die_size in die_sizes_mm:
+            data = df[df['die_size_mm'] == die_size]
+            ax3.plot(data['wafer_diameter_mm'], data['cost_per_transistor'] * 1e6,
+                    'o-', label=f'{die_size}mm die', linewidth=2, markersize=8)
+
+        ax3.set_xlabel('Wafer Diameter (mm)')
+        ax3.set_ylabel('Cost per Million Transistors ($)')
+        ax3.set_title('Cost-Benefit Analysis')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+        ax3.set_yscale('log')
+
+        # 4. Total transistor count comparison
+        ax4 = axes[1, 0]
+        pivot_transistors = df.pivot(index='wafer_size', columns='die_size_mm', values='total_transistors')
+        sns.heatmap(pivot_transistors / 1e9, annot=True, fmt='.1f', cmap='YlOrRd', ax=ax4)
+        ax4.set_title('Total Transistor Count (Billions)')
+        ax4.set_ylabel('Wafer Size')
+        ax4.set_xlabel('Die Size (mm)')
+
+        # 5. Yield rate vs wafer size
+        ax5 = axes[1, 1]
+        yield_data = df.groupby('wafer_size')['yield_rate'].first()
+        bars = ax5.bar(yield_data.index, yield_data.values, color=['skyblue', 'lightgreen', 'salmon'])
+        ax5.set_ylabel('Yield Rate')
+        ax5.set_title('Yield Rate for Different Wafer Sizes')
+        ax5.grid(True, alpha=0.3)
+
+        # Add values on bars
+        for bar, value in zip(bars, yield_data.values):
+            height = bar.get_height()
+            ax5.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                    f'{value:.0%}', ha='center', va='bottom')
+
+        # 6. CP value ranking (transistors/cost)
+        ax6 = axes[1, 2]
+        colors = plt.cm.Set3(np.linspace(0, 1, len(die_sizes_mm)))
+        for i, die_size in enumerate(die_sizes_mm):
+          data = df[df['die_size_mm'] == die_size]
+          ax6.bar([f'{wafer}_{die_size}mm' for wafer in data['wafer_size']],
+                  data['cp_value'] / 1e6, color=colors[i], alpha=0.7,
+                  label=f'{die_size}mm die')
+
+        ax6.set_ylabel('CP Value (Million Transistors/$)')
+        ax6.set_title('CP Value Comparison (Transistors/Cost)')
+        ax6.tick_params(axis='x', rotation=45)
+        ax6.legend()
+        ax6.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        plt.show()
+
+        # Output best CP value suggestions
+        print("=== Best CP Value Recommendations ===")
+        for die_size in die_sizes_mm:
+            best_option = df[df['die_size_mm'] == die_size].loc[
+                df[df['die_size_mm'] == die_size]['cp_value'].idxmax()]
+            print(f"Die size {die_size}mm: Best choice is {best_option['wafer_size']} "
+              f"(CP value: {best_option['cp_value']/1e6:.1f} Million Transistors/$)")
+
+        return df
+
+# Main execution
+if __name__ == "__main__":
+    # 2. Wafer analysis
+    calculator = WaferTransistorCalculator()
+
+    # Set parameters
+    die_sizes = [5, 10, 15, 20]  # mm
+    transistors_per_die = 1000000  # Transistors per die
+
+    # Perform analysis
+    results_df = calculator.plot_wafer_analysis(die_sizes, transistors_per_die)
+
+    # Display detailed results table
+    print("\nDetailed Analysis Results:")
+    print(results_df.round(2))
