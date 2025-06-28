@@ -1,0 +1,215 @@
+#OES based EDP:終點監測
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import signal
+import pandas as pd
+import seaborn as sns
+import ruptures as rpt
+class PlasmaEtchEndpointDetector:
+    def __init__(self):
+        self.wavelengths = np.linspace(200, 800, 1000)  # Wavelength range (nm)
+        self.time = np.linspace(0, 100, 1000)  # Time range (seconds)
+
+    def generate_spectrum(self, t):
+        """Generate time-varying spectrum"""
+        # Base spectrum
+        base_spectrum = np.exp(-(self.wavelengths - 400)**2 / 5000)
+
+        # Add feature peaks (simulating etch byproducts)
+        peak1 = 0.8 * np.exp(-(self.wavelengths - 300)**2 / 100) * (1 - t/100)  # Decreases over time
+        peak2 = 0.6 * np.exp(-(self.wavelengths - 500)**2 / 200) * (t/100)      # Increases over time
+        peak3 = 0.4 * np.exp(-(self.wavelengths - 650)**2 / 150) * np.sin(t/10) # Periodic variation
+
+        # Add noise
+        noise = 0.05 * np.random.random(len(self.wavelengths))
+
+        spectrum = base_spectrum + peak1 + peak2 + peak3 + noise
+        return np.maximum(spectrum, 0)  # Ensure non-negative values
+
+    def apply_grating_filter(self, spectrum, center_wavelength=400, bandwidth=50):
+        """Simulate grating filter"""
+        filter_response = np.exp(-((self.wavelengths - center_wavelength)**2) / (2 * bandwidth**2))
+        filtered_spectrum = spectrum * filter_response
+        return filtered_spectrum, filter_response
+
+    def simulate_etch_process(self):
+        """Simulate the entire etch process"""
+        spectra_data = []
+        signal_SiF4 = []
+        signal_COx = []
+        for t in self.time:
+            # PAD 區：t=20~60 蝕刻 BPSG → SiF4 高，t>60 開始接觸到 nitride → SiF4 減少
+            if t < 60:
+              pad_SiF4 = 1.0 - np.clip((t - 20) / 40, 0, 1)
+            else:
+              pad_SiF4 = 0.8 * np.exp(-0.1 * (t - 60))  # 遇到 nitride，反應變弱
+
+            # Floating gate 區：t=60~90 才開始顯著反應
+            if t < 60:
+              fg_COx = 0.2
+            else:
+              fg_COx = 1.0 - np.clip((t - 60) / 30, 0, 1)
+
+            # 模擬雜訊與總產物
+            total_SiF4 = 0.6 * pad_SiF4 + 0.4 * fg_COx + 0.02 * np.random.randn()
+            total_COx  = 0.3 * pad_SiF4 + 0.7 * fg_COx + 0.01 * np.random.randn()
+
+            signal_SiF4.append(total_SiF4)
+            signal_COx.append(total_COx)
+
+            # 光譜暫時保留原邏輯
+            spectrum = self.generate_spectrum(t)
+            spectra_data.append(spectrum)
+
+        return np.array(spectra_data), np.array(signal_SiF4), np.array(signal_COx)
+
+    def rupture_analysis(self, signal):
+        """Rupture algorithm for change point detection"""
+        # Use Pelt method from ruptures library
+        algo = rpt.Pelt(model="l2").fit(signal)
+        result = algo.predict(pen=10)  # Adjust penalty parameter as needed
+
+        # The last change point is likely the endpoint
+        if len(result) > 1:
+            endpoint_idx = result[-2]  # Second-to-last point as endpoint
+        else:
+            endpoint_idx = len(signal) - 1
+
+        return endpoint_idx, self.time[endpoint_idx]
+
+    def detect_endpoint(self, signal, threshold_factor=0.3):
+        """Detect etch endpoint using rupture analysis and threshold"""
+        # Use rupture analysis to find change point
+        rupture_idx, rupture_time = self.rupture_analysis(signal)
+
+        # Calculate signal gradient for additional validation
+        gradient = np.gradient(signal)
+        gradient_endpoint_idx = np.argmax(np.abs(gradient))
+
+        # Threshold method for validation
+        signal_mean = np.mean(signal)
+        threshold = signal_mean * threshold_factor
+        below_threshold = np.where(signal < threshold)[0]
+        threshold_endpoint = below_threshold[0] if len(below_threshold) > 0 else len(signal) - 1
+
+        # Choose the earliest reasonable endpoint
+        final_endpoint = min(rupture_idx, gradient_endpoint_idx, threshold_endpoint)
+        return final_endpoint, self.time[final_endpoint]
+
+    def plot_complete_analysis(self):
+        """Plot complete analysis charts"""
+        # Simulate etch process
+        spectra_data, signal_SiF4, signal_COx = self.simulate_etch_process()
+
+        # 建立 figure 與 axes (2 rows x 4 columns, 共7張圖，第8格空白)
+        fig, axs = plt.subplots(2, 4, figsize=(20, 10), subplot_kw={'projection': None})
+
+        # 1. 3D spectrum plot
+        ax1 = fig.add_subplot(2, 4, 1, projection='3d')
+        T, W = np.meshgrid(self.time[::10], self.wavelengths)
+        Z = spectra_data[::10].T
+        ax1.plot_surface(T, W, Z, cmap='viridis', alpha=0.8)
+        ax1.set_xlabel('Time (s)')
+        ax1.set_ylabel('Wavelength (nm)')
+        ax1.set_zlabel('Intensity')
+        ax1.set_title('Spectrum Variation Over Time')
+
+        # 2. Grating filter effect
+        ax2 = axs[0, 1]
+        sample_spectrum = spectra_data[50]
+        filtered_spectrum, filter_response = self.apply_grating_filter(sample_spectrum)
+        ax2.plot(self.wavelengths, sample_spectrum, 'b-', label='Original', alpha=0.7)
+        ax2.plot(self.wavelengths, filter_response * np.max(sample_spectrum), 'r--', label='Filter')
+        ax2.plot(self.wavelengths, filtered_spectrum, 'g-', label='Filtered', linewidth=2)
+        ax2.set_title('Grating Filter Effect')
+        ax2.set_xlabel('Wavelength (nm)')
+        ax2.set_ylabel('Intensity')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
+        # 3. Monitoring signal (SiF₄)
+        ax3 = axs[0, 2]
+        endpoint_idx, endpoint_time = self.detect_endpoint(signal_SiF4)
+        ax3.plot(self.time, signal_SiF4, 'b-', linewidth=2, label='SiF₄ Signal')
+        ax3.axvline(x=endpoint_time, color='r', linestyle='--', linewidth=2, label=f'Endpoint: {endpoint_time:.1f}s')
+        ax3.set_title('SiF₄ Monitoring Signal')
+        ax3.set_xlabel('Time (s)')
+        ax3.set_ylabel('Intensity')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+
+        # 4. Rupture analysis
+        ax4 = axs[0, 3]
+        algo = rpt.Pelt(model="l2").fit(signal_SiF4)
+        result = algo.predict(pen=10)
+        change_points = self.time[result[:-1]]
+        ax4.plot(self.time, signal_SiF4, 'b-', linewidth=2, label='SiF₄ Signal')
+        for cp in change_points:
+            ax4.axvline(x=cp, color='r', linestyle='--', linewidth=1)
+        ax4.axvline(x=endpoint_time, color='g', linestyle='--', linewidth=2, label=f'Endpoint: {endpoint_time:.1f}s')
+        ax4.set_title('Rupture Change Points')
+        ax4.set_xlabel('Time (s)')
+        ax4.set_ylabel('Intensity')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+
+        # 5. Square wave conversion
+        ax5 = axs[1, 0]
+        threshold = np.mean(signal_SiF4)
+        square_wave = np.where(signal_SiF4 > threshold, 1, 0)
+        ax5.plot(self.time, signal_SiF4 / np.max(signal_SiF4), 'b-', alpha=0.7, label='Normalized')
+        ax5.plot(self.time, square_wave, 'r-', linewidth=2, label='Square Wave')
+        ax5.axvline(x=endpoint_time, color='g', linestyle='--', linewidth=2, label='Detected Endpoint')
+        ax5.set_title('Square Wave Approximation')
+        ax5.set_xlabel('Time (s)')
+        ax5.set_ylabel('Amplitude')
+        ax5.legend()
+        ax5.grid(True, alpha=0.3)
+
+        # 6. Statistical analysis
+        ax6 = axs[1, 1]
+        window_size = 50
+        rolling_mean = pd.Series(signal_SiF4).rolling(window=window_size).mean()
+        rolling_std = pd.Series(signal_SiF4).rolling(window=window_size).std()
+        ax6.plot(self.time, signal_SiF4, 'lightblue', alpha=0.7, label='Raw Signal')
+        ax6.plot(self.time, rolling_mean, 'blue', linewidth=2, label='Rolling Mean')
+        ax6.fill_between(self.time, rolling_mean - rolling_std, rolling_mean + rolling_std,
+                         alpha=0.3, color='blue', label='±1 Std Dev')
+        ax6.axvline(x=endpoint_time, color='r', linestyle='--', linewidth=2, label='Endpoint')
+        ax6.set_title('Statistical Analysis')
+        ax6.set_xlabel('Time (s)')
+        ax6.set_ylabel('Intensity')
+        ax6.legend()
+        ax6.grid(True, alpha=0.3)
+
+        # 7. SiF₄ vs COₓ Signal Comparison
+        ax7 = axs[1, 2]
+        SiF4_ep_idx, SiF4_ep_time = self.detect_endpoint(signal_SiF4)
+        COx_ep_idx, COx_ep_time = self.detect_endpoint(signal_COx)
+        ax7.plot(self.time, signal_SiF4, label='SiF₄ Signal', color='blue', linewidth=2)
+        ax7.plot(self.time, signal_COx, label='COₓ Signal', color='green', linewidth=2)
+        ax7.axvline(x=SiF4_ep_time, color='blue', linestyle='--', linewidth=2, label=f'SiF₄ Endpoint: {SiF4_ep_time:.1f}s')
+        ax7.axvline(x=COx_ep_time, color='green', linestyle='--', linewidth=2, label=f'COₓ Endpoint: {COx_ep_time:.1f}s')
+        ax7.set_xlabel('Time (s)')
+        ax7.set_ylabel('Relative Intensity')
+        ax7.set_title('Etch Byproduct Signals')
+        ax7.legend()
+        ax7.grid(True, alpha=0.3)
+
+        # 8. 留空或補其他分析
+        axs[1, 3].axis('off')  # 空白格
+
+        plt.tight_layout()
+        plt.show()
+
+        return endpoint_time
+# Main execution
+if __name__ == "__main__":
+    print("=== Plasma Etch Endpoint Detection Simulation ===")
+
+    # Plasma etch simulation
+    detector = PlasmaEtchEndpointDetector()
+    endpoint_time = detector.plot_complete_analysis()
+    print(f"Detected etch endpoint time: {endpoint_time:.2f} seconds")
+
+    print("\n=== Wafer Transistor Count Analysis ===")
