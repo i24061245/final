@@ -1,0 +1,132 @@
+#OES based EDP:各類光柵模擬
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Parameters
+wavelengths = np.linspace(200e-9, 700e-9, 100)  # Wavelength range: 200–700 nm
+d = 1 / 1200e3  # Grating period (1200 lines/mm -> d = 8.33e-7 m)
+theta_i = np.radians(10)  # Incidence angle: 10 degrees
+m = 1  # First-order diffraction
+N = 10000  # Total number of grating lines
+c = 3e8  # Speed of light (m/s)
+
+# Grating equation: Calculate diffraction angle
+def grating_equation(wavelength, d, theta_i, m):
+    sin_theta_m = np.sin(theta_i) + m * wavelength / d
+    return np.where(np.abs(sin_theta_m) <= 1, np.arcsin(sin_theta_m), np.nan)
+
+# Diffraction efficiency (simplified model)
+def diffraction_efficiency(wavelength, grating_type, polarization='TE'):
+    """Simulate diffraction efficiency for different gratings"""
+    if grating_type == 'plane':
+        # Plane grating: Rectangular grooves, efficiency varies smoothly
+        efficiency = 0.7 * np.sin(np.pi * wavelength / d)**2
+        if polarization == 'TM':
+            efficiency *= 0.8  # Lower efficiency for TM polarization
+    elif grating_type == 'holographic':
+        # Holographic grating: Sinusoidal profile, high efficiency, low scattering
+        efficiency = 0.9 * np.cos(np.pi * wavelength / d)**2
+        if polarization == 'TM':
+            efficiency *= 0.95  # Smaller polarization dependence
+    elif grating_type == 'vph':
+        # VPH grating: High efficiency, low polarization sensitivity
+        efficiency = 0.95 * np.ones_like(wavelength)  # Near-constant efficiency
+        if polarization == 'TM':
+            efficiency *= 0.98  # Minimal polarization sensitivity
+    return np.clip(efficiency, 0, 1)
+
+# Spectral resolution
+def spectral_resolution(wavelengths, m, N):
+    """Calculate resolution R = λ / Δλ"""
+    return m * N * np.ones_like(wavelengths)
+
+def spectral_resolution_variable(wavelengths, d, theta_i, m, delta_theta=np.radians(0.01)):
+    """Estimate spectral resolution based on angular dispersion"""
+    theta_m = grating_equation(wavelengths, d, theta_i, m)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        cos_theta = np.cos(theta_m)
+        d_lambda = d * cos_theta * delta_theta / m
+        R = wavelengths / d_lambda
+        R[np.isnan(R)] = 0
+    return R
+
+
+# Signal-to-noise ratio (qualitative)
+def signal_to_noise(grating_type):
+    """Simulate relative SNR based on scattering"""
+    if grating_type == 'plane':
+        return 50  # Moderate SNR due to higher scattering
+    elif grating_type == 'holographic':
+        return 80  # Higher SNR due to low scattering
+    elif grating_type == 'vph':
+        return 90  # Highest SNR due to minimal scattering
+
+# Calculate diffraction angles
+theta_m_plane = grating_equation(wavelengths, d, theta_i, m)
+theta_m_holo = grating_equation(wavelengths, d, theta_i, m)
+theta_m_vph = grating_equation(wavelengths, d, theta_i, m)
+
+# Calculate diffraction efficiencies
+eff_plane_te = diffraction_efficiency(wavelengths, 'plane', 'TE')
+eff_plane_tm = diffraction_efficiency(wavelengths, 'plane', 'TM')
+eff_holo_te = diffraction_efficiency(wavelengths, 'holographic', 'TE')
+eff_holo_tm = diffraction_efficiency(wavelengths, 'holographic', 'TM')
+eff_vph_te = diffraction_efficiency(wavelengths, 'vph', 'TE')
+eff_vph_tm = diffraction_efficiency(wavelengths, 'vph', 'TM')
+
+# Calculate resolution
+resolution =  spectral_resolution_variable(wavelengths, d, theta_i, m)
+
+# Plotting
+plt.figure(figsize=(15, 10))
+
+# Plot 1: Diffraction angles
+plt.subplot(2, 2, 1)
+plt.plot(wavelengths * 1e9, np.degrees(theta_m_plane), label='Plane')
+plt.plot(wavelengths * 1e9, np.degrees(theta_m_holo), label='Holographic', linestyle='--')
+plt.plot(wavelengths * 1e9, np.degrees(theta_m_vph), label='VPH', linestyle='-.')
+plt.xlabel('Wavelength (nm)')
+plt.ylabel('Diffraction Angle (degrees)')
+plt.title('Diffraction Angle vs Wavelength')
+plt.legend()
+plt.grid(True)
+
+# Plot 2: Diffraction efficiency (TE polarization)
+plt.subplot(2, 2, 2)
+plt.plot(wavelengths * 1e9, eff_plane_te, label='Plane')
+plt.plot(wavelengths * 1e9, eff_holo_te, label='Holographic', linestyle='--')
+plt.plot(wavelengths * 1e9, eff_vph_te, label='VPH', linestyle='-.')
+plt.xlabel('Wavelength (nm)')
+plt.ylabel('Diffraction Efficiency (TE)')
+plt.title('Diffraction Efficiency (TE) vs Wavelength')
+plt.legend()
+plt.grid(True)
+
+# Plot 3: Diffraction efficiency (TM polarization)
+plt.subplot(2, 2, 3)
+plt.plot(wavelengths * 1e9, eff_plane_tm, label='Plane')
+plt.plot(wavelengths * 1e9, eff_holo_tm, label='Holographic', linestyle='--')
+plt.plot(wavelengths * 1e9, eff_vph_tm, label='VPH', linestyle='-.')
+plt.xlabel('Wavelength (nm)')
+plt.ylabel('Diffraction Efficiency (TM)')
+plt.title('Diffraction Efficiency (TM) vs Wavelength')
+plt.legend()
+plt.grid(True)
+
+# Plot 4: Spectral resolution
+plt.subplot(2, 2, 4)
+plt.plot(wavelengths * 1e9, resolution, label='All Gratings')
+plt.xlabel('Wavelength (nm)')
+plt.ylabel('Spectral Resolution (R = λ/Δλ)')
+plt.title('Spectral Resolution vs Wavelength')
+plt.legend()
+plt.grid(True)
+
+plt.tight_layout()
+plt.show()
+
+# Print SNR for comparison
+print("Signal-to-Noise Ratio (relative):")
+print(f"Plane Grating: {signal_to_noise('plane')}")
+print(f"Holographic Grating: {signal_to_noise('holographic')}")
+print(f"VPH Grating: {signal_to_noise('vph')}")
